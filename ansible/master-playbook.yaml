@@ -1,0 +1,112 @@
+---
+- hosts: all
+  become: true
+  tasks:
+  - name: Remove swapfile from /etc/fstab
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+    with_items:
+      - swap
+      - none
+
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+  - name: Install packages that allow apt to be used over HTTPS
+    apt:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - apt-transport-https
+      - ca-certificates
+      - software-properties-common
+      - curl
+      - gnupg2
+
+  - name: Add an apt signing key for Docker
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: Add apt repository for stable version
+    apt_repository:
+      repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable
+      state: present
+
+  - name: Install containerd
+    apt:
+      name: containerd.io
+      state: present
+
+  - name: Configure containerd
+    shell:
+      "containerd config default>/etc/containerd/config.toml"
+
+  - name: Change cgroup for systemd
+    lineinfile:
+      path: /etc/containerd/config.toml
+      regexp: "SystemdCgroup = false"
+      line: "SystemdCgroup = true"
+      state: present
+
+  - name: Start containerd service
+    service:
+      name: containerd
+      state: restarted
+      enabled: true
+
+  - name: Add modeprobe kernel load
+    copy: 
+      dest: "/etc/modules-load.d/k8s.conf"
+      content: |  
+        overlay
+        br_netfilter
+  
+  - name: Load at runtime overlay
+    modprobe:
+      name: "overlay"
+      state: present
+
+  - name: Load at runtime netfilter
+    modprobe:
+      name: "br_netfilter"
+      state: present
+
+  - name: Add Ip config 
+    copy: 
+      dest: "/etc/sysctl.d/kubernetes.conf"
+      content: |  
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.bridge.bridge-nf-call-iptables = 1
+        net.ipv4.ip_forward = 1
+
+  - name: Reload sysctl
+    shell:
+      "sudo sysctl --system"
+
+  - name: Add an apt signing key for Kubernetes
+    apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: Adding apt repository for Kubernetes
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: Install Kubernetes binaries
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - kubelet 
+        - kubeadm
+        - kubectl
